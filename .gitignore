@@ -1,0 +1,8 @@
+# your account's IDs live here — never commit it
+config.py
+# script outputs: plans, results, exports (contain customer data)
+out/
+*.csv
+.env
+__pycache__/
+*.pyc
