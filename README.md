@@ -1,4 +1,4 @@
-# stripe-catalogue-migration
+# Stripe Catalogue Migration
 
 Scripts and SQL for moving live Stripe subscriptions onto a new product
 catalogue **without changing what anyone pays**, and for resolving
