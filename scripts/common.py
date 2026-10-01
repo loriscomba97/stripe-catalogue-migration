@@ -45,7 +45,7 @@ def init_stripe() -> str:
               " export it from a file or a keychain lookup.", file=sys.stderr)
         raise SystemExit(2)
     stripe.api_key = key
-    mode = "LIVE" if key.startswith("sk_live_") else "test"
+    mode = "LIVE" if key.startswith(("sk_live_", "rk_live_")) else "test"
     print(f"Stripe mode: {mode}")
     return mode
 

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Check dependencies
+        run: python -m pip check
+      - name: Compile Python files
+        run: python -m compileall -q scripts config.example.py test
+      - name: Import scripts against the installed Stripe library
+        run: |
+          cp config.example.py config.py
+          PYTHONPATH="scripts:." python -c "import audit_tax_behavior, common, export_migration_origins, migrate_all, migrate_one, write_price_metadata"
+      - name: Run tests
+        run: python -m unittest discover -s test -v

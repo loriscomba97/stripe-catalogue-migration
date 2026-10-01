@@ -42,8 +42,9 @@ and the rest.
 
 - [ ] Archive legacy prices
 - [ ] Handle the skipped subscriptions as their blockers clear
-- [ ] `export_migration_origins.py --since <migration date>`: the lineage
-      for reporting and comms
+- [ ] `export_migration_origins.py --since <migration date> --no-email`:
+      the lineage for reporting and comms. Omit `--no-email` only when the
+      output needs customer email and can be stored as sensitive data.
 
 ## If it goes wrong
 

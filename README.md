@@ -1,107 +1,93 @@
 # Stripe Catalogue Migration
 
-Scripts and SQL for moving live Stripe subscriptions onto a new product
-catalogue **without changing what anyone pays**, and for resolving
-entitlement from price metadata instead of product names.
+**Move live subscriptions to a new Stripe product catalogue without changing what customers pay.**
 
-Extracted from a real migration: a live subscription base, three licence
-types (subscription, lifetime, perpetual with an update window), a
-rent-to-own plan Stripe doesn't model, one product line that had to be left
-alone, and a legacy catalogue that had grown one price at a time. Every
-guard in here exists because something went wrong without it.
+This repository contains Python scripts and SQL for a catalogue migration where every existing price gets an exact mirror under a new product. The subscription keeps its amount, currency, interval, quantity, renewal date, payment method and discounts. Entitlement moves from product names to price metadata.
 
-## The idea
+The project was extracted from a completed migration with subscriptions, lifetime licenses, perpetual licenses with update windows and rent-to-own plans. Account IDs and customer data are replaced by configuration and placeholders.
 
-Stripe prices are immutable. You can't edit an amount, a currency, an
-interval or a tax behaviour, and you can't move a price to another product.
-So a catalogue reorganisation means:
+[Get started](#get-started) · [Migration runbook](docs/RUNBOOK.md) · [Catalogue conventions](docs/CONVENTIONS.md) · [Lessons](docs/LESSONS.md)
 
-1. Build the new products.
-2. For every legacy price with live subscribers, create a **mirror** under
-   the right new product: identical amount, currency, interval, interval
-   count and `tax_behavior`, tagged with metadata.
-3. Point each subscription's item at its mirror with
-   `proration_behavior: none`. Nothing is billed, nothing resets.
-4. Resolve entitlement from the price's metadata, so the app never has to
-   know which product a price belongs to.
+[![CI](https://github.com/loriscomba97/stripe-catalogue-migration/actions/workflows/ci.yml/badge.svg)](https://github.com/loriscomba97/stripe-catalogue-migration/actions/workflows/ci.yml)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The scripts do steps 2 to 4 and refuse to do anything ambiguous.
+## See the migration before it writes
+
+The batch starts with a dry run. It rebuilds the source-to-destination map from the live API, writes `out/plan.csv`, lists every subscription it would migrate and groups every skipped subscription by reason.
+
+```text
+124 subscriptions: 117 to migrate, 7 skipped
+
+SKIPPED
+     3  no_mirror[studio/web/std]
+     2  renews_imminently
+     1  has_schedule
+     1  multi_item[2]
+```
+
+The numbers above are illustrative. Review the plan from your own account before adding `--apply`.
+
+## The migration model
+
+Stripe prices keep their product association. Reorganizing a catalogue therefore uses four steps:
+
+1. Create the new products.
+2. Create one mirror for every legacy price with live subscribers. Match amount, currency, interval, interval count and `tax_behavior`.
+3. Add structured metadata to the new prices, then swap each subscription item to its exact mirror with `proration_behavior: none`.
+4. Resolve access from price metadata instead of product names.
+
+The repository tags and verifies prices, plans and applies the subscription swaps, and provides the entitlement SQL. It does not create products or mirror prices.
+
+## Get started
+
+Requires Python 3.9 or later and `stripe-python` 10 or later. The SQL targets Supabase.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp config.example.py config.py
+```
+
+Fill `config.py` with your product IDs, tier rules and a unique idempotency prefix. Load `STRIPE_API_KEY` from a local secret store. Do not paste a live key into a script, commit it or include it in a report.
+
+Run the read-only checks and dry runs first:
+
+```bash
+cd scripts
+python audit_tax_behavior.py
+python write_price_metadata.py
+python migrate_one.py
+python migrate_all.py
+```
+
+Deploy [`sql/entitlements.sql`](sql/entitlements.sql) before the batch. Confirm that legacy and new prices resolve correctly, then follow the [migration-day runbook](docs/RUNBOOK.md) for the rehearsal, first batch, full run and verification.
 
 ## Safety model
 
-Every script is **dry-run by default** and writes only with `--apply`.
-Every write has an idempotency key, so a re-run after a crash is safe. The
-batch migration snapshots every subscription before and after, allows only
-`price_id` and `product` to differ, and **stops on the first unexpected
-change**. Rollback uses a separate idempotency namespace, because reusing
-the migration key would return Stripe's cached response and silently do
-nothing.
+- **Dry run first.** Scripts that change Stripe require `--apply`. Live subscription changes also require typing `yes`.
+- **Exact mirrors only.** Routing uses tier, channel, rent-to-own state, currency, interval, interval count and amount. Missing or ambiguous matches are skipped.
+- **No silent contract changes.** The batch rejects tax mismatches, multiple items, schedules, connected applications and renewals inside the configured safety window.
+- **Verify every write.** Each subscription is read before and after. Only `price_id` and `product` may differ. The batch stops at the first unexpected change.
+- **Safe retries and rollback.** Every write uses an idempotency key. Rollback uses a separate namespace because Stripe returns the saved response when a key is reused.
 
-Subscriptions that can't be moved safely are skipped with a named reason:
-tax-behaviour mismatch, no mirror, more than one item, attached to a
-schedule, renewing in the next two hours. Nothing is guessed.
+Generated plans, results and exports contain subscription, customer and price IDs. `out/`, `*.csv` and `config.py` are ignored, but they still need restricted storage. `export_migration_origins.py` includes customer email unless you pass `--no-email`.
 
-## Requirements
+## What is included
 
-Python 3.9+ and `stripe-python` 10 or later. The SQL targets Supabase
-(see below).
+| Area | Files | Purpose |
+|---|---|---|
+| Configuration | [`config.example.py`](config.example.py) | Account-specific IDs, routing and metadata rules |
+| Migration | [`scripts/`](scripts) | Audit, metadata plan, rehearsal, batch, verification and rollback |
+| Entitlement | [`sql/`](sql) | Reference schema, resolver, projections and communication queries |
+| Operations | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Ordered checklist for migration day |
+| Conventions | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Price nickname grammar and metadata keys |
+| Lessons | [`docs/LESSONS.md`](docs/LESSONS.md) | Failures and edge cases found during the original migration |
 
-## Quickstart
+## Limits
 
-```
-pip install -r requirements.txt
-cp config.example.py config.py      # fill in your product ids
-export STRIPE_API_KEY=$(cat ~/.stripe_key)   # never paste a key into a terminal
+This is a reference implementation, not a drop-in migration. It does not create the target catalogue, sync Stripe into a database, complete rent-to-own plans or support plain Postgres without adapting the Supabase roles and user lookup. Test the routing and SQL against your own schema and API version before using a live key.
 
-cd scripts
-python audit_tax_behavior.py        # read-only: find the prices that will break
-python write_price_metadata.py      # dry run, then --apply
-python migrate_one.py               # rehearse on one subscription
-python migrate_all.py               # dry run, read the skip breakdown
-python migrate_all.py --limit 10 --apply
-python migrate_all.py --apply
-```
+## License
 
-Deploy `sql/entitlements.sql` **before** the batch. It reads legacy and new
-prices alike, so real users exercise it for as long as you like before
-migration day, and the migration becomes a `price_id` swap on rows that
-already resolve.
-
-## Layout
-
-```
-config.example.py            every account-specific value; copy to config.py
-scripts/
-  common.py                  stripe-python compatibility, snapshot, diff
-  audit_tax_behavior.py      the check that most often breaks "zero change"
-  write_price_metadata.py    metadata from the nickname convention
-  migrate_one.py             single-subscription rehearsal
-  migrate_all.py             the batch, with pre-flight, ordering, rollback
-  export_migration_origins.py  recover each sub's original product afterwards
-sql/
-  schema.sql                 what the SQL expects
-  entitlements.sql           the resolver, trials, permissions
-  migration_projection.sql   post-migration tier distribution, before you run
-  customers_by_product.sql   who bought what, for communications
-docs/
-  CONVENTIONS.md             nickname grammar and metadata keys
-  RUNBOOK.md                 the day, in order
-  LESSONS.md                 what bit us
-```
-
-## What it does not do
-
-- Create the new products or the mirror prices. That's a catalogue design
-  decision; do it with your own script, then run `write_price_metadata.py`
-  to tag them.
-- Sync Stripe to your database. It assumes something already mirrors
-  products and prices (with metadata) into tables the SQL can read.
-- Handle rent-to-own completion. RTO is an ordinary subscription in Stripe;
-  counting instalments and cancelling at term is yours to build.
-- Work outside Supabase unmodified. The SQL uses `auth.uid()` and the
-  `authenticated` / `service_role` roles; on plain Postgres, replace those
-  with your own session-user function and roles.
-
-## Licence
-
-MIT. See `LICENSE`.
+[MIT](LICENSE) © 2026 Loris Comba.
